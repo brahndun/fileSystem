@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "filesystem.h"
+#include "softwaredisk.h"
 
 // RUN formatfs before conducting this test!
 

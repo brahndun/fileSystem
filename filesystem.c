@@ -256,34 +256,50 @@ int findDirectoryItem(DirectoryItem * directory, char* name) {
     return -1;
 }
 
-int writeDataBlockFromFile(File file, unsigned short int blockIndex, void * data) {
-    int dataBlockIndex;
+int findInodeDataBlockIndex(unsigned short int blockIndex, Inode inode) {
     IndirectBlock indirectBlock;
-    if (blockIndex < NUM_DIRECTLY_MAPPED_INODE_BLOCKS)
-        dataBlockIndex = file->inode.blocks[blockIndex];
-    else {
-        if (!read_sd_block(&indirectBlock, file->inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS]))
-            dataBlockIndex = -1;
+    if (blockIndex < NUM_DIRECTLY_MAPPED_INODE_BLOCKS) {
+        return inode.blocks[blockIndex];
+    }
+    else if (!inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS <= NUM_INDIRECT_BLOCK_MAPPINGS]) {
+        return 0;
+    }
+    else if (blockIndex - NUM_DIRECTLY_MAPPED_INODE_BLOCKS <= NUM_INDIRECT_BLOCK_MAPPINGS) {
+        if (!read_sd_block(&indirectBlock, inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS]))
+            return -1;
         else
-            dataBlockIndex = indirectBlock.blocks[blockIndex - NUM_DIRECTLY_MAPPED_INODE_BLOCKS];
+            return indirectBlock.blocks[blockIndex - NUM_DIRECTLY_MAPPED_INODE_BLOCKS];
     }
+    else {
+        return -1;
+    }
+}
 
-    if (!setDataBlockStatus(dataBlockIndex, 1)) {
-        fserror = FS_IO_ERROR;
-        return 0;
-    }
+int writeDataBlockFromFile(File file, unsigned short int blockIndex, void * data) {
+   int dataBlockIndex = findInodeDataBlockIndex(blockIndex, file->inode);
 
-    if (!setInodeDataBlock(file, blockIndex, dataBlockIndex)) {
-        return 0;
-    }
+   if (dataBlockIndex == 0) {
+       dataBlockIndex = findFreeDataBlockIndex();
+       if (dataBlockIndex < 0) {
+           fserror = FS_OUT_OF_SPACE;
+           return 0;
+       }
+       else {
+           if (!setDataBlockStatus(dataBlockIndex,1)) {
+               fserror = FS_IO_ERROR;
+               return 0;
+           }
+            if (!setInodeDataBlock(file, blockIndex, dataBlockIndex))
+                return 0;
+       }
+   }
 
-    if (dataBlockIndex <= LAST_DATA_BLOCK_INDEX && dataBlockIndex >= FIRST_DATA_BLOCK_INDEX) {
-        if (!write_sd_block(data, dataBlockIndex))
-            return 0;
-    }
-    else
-        return 0;
-    return 1;
+   if (!write_sd_block(data, dataBlockIndex)) {
+       fserror = FS_IO_ERROR;
+       return 0;
+   }
+   fserror = FS_NONE;
+   return 1;
 }
 int readDataBlockFromFile(File file, unsigned short int blockIndex, void *data) {
     //NOTE: The blockIndex refers to the index of the data block for the file, not the software disk
@@ -432,7 +448,7 @@ int seek_file(File file, unsigned long bytepos) {
         return 0;
     }
     else {
-        if (bytepos > MAX_FILE_BYTES) {
+        if (bytepos >= MAX_FILE_BYTES) {
             fserror=FS_EXCEEDS_MAX_FILE_SIZE;
             return 0;
         }
@@ -453,20 +469,21 @@ unsigned long file_length(File file) {
 }
 
 int delete_file(char *name) {
-    DirectoryItem directory;
+
+    DirectoryItem * directory = (DirectoryItem*) malloc(sizeof(DirectoryItem));
     int blockIndex;
-    blockIndex = findDirectoryItem(&directory, name);
+    blockIndex = findDirectoryItem(directory, name);
     if (blockIndex < 0) {
         fserror = FS_FILE_NOT_FOUND;
         return 0;
     }
-    else if (directory.open) {
+    else if (directory->open) {
         fserror = FS_FILE_OPEN;
         return 0;
     }
     else {
-        bzero(&directory,sizeof(DirectoryItem));
-        if (!write_sd_block(&directory, blockIndex))
+        bzero(directory,sizeof(DirectoryItem));
+        if (!write_sd_block(directory, blockIndex))
         {
             fserror = FS_IO_ERROR;
             return 0;
@@ -475,6 +492,45 @@ int delete_file(char *name) {
 
     return 1;
     
+}
+
+File open_file(char *name, FileMode mode) {
+    File file = (File) malloc(sizeof(FileInternals));
+
+    bzero(file, sizeof(FileInternals));
+    file->position = 0;
+    fserror = FS_NONE;
+    file->fileMode = mode;
+
+    int directory = findDirectoryItem(&file->directory, name);
+    if (directory < 0) {
+        fserror=FS_FILE_NOT_FOUND;
+        return 0;
+    }
+
+    else {
+        file->directoryItemBlockIndex = directory;
+        if (file->directory.open) {
+            fserror = FS_FILE_OPEN;
+            return 0;
+        }
+        else {
+            file->directory.open = 1;
+            if (!writeDirectoryItem(file->directory, file->directoryItemBlockIndex)) {
+                fserror=FS_IO_ERROR;
+                return 0;
+            }
+            else {
+                if (!readInode(file->directory.inodeIndex, &(file->inode))) {
+                    fserror = FS_IO_ERROR;
+                    return 0;
+                }
+            }
+        }
+    }
+
+    fserror = FS_NONE;
+    return file;
 }
 
 void close_file(File file) {

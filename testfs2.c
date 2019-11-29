@@ -34,6 +34,7 @@ int main(int argc, char *argv[]) {
       break;
     }
 
+    /*
     seek_file(f, 0);
     bzero(buf2, 1000);
     ret=read_file(f, buf2, 1000);
@@ -43,8 +44,8 @@ int main(int argc, char *argv[]) {
     fs_print_error();
     if (! ret) {
       break;
-    }
-
+    }*/
+    
     len=file_length(f);
     printf("ret from file_length(f) = %lu\n",
 	   len);
