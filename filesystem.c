@@ -325,7 +325,7 @@ int readDataBlockFromFile(File file, void *data, unsigned short int blockIndex) 
 }
 
 File create_file(char *name) {
-    File file = malloc(sizeof(FileInternals));
+    File file = (File) malloc(sizeof(FileInternals));
     fserror=FS_NONE;
     bzero(file, sizeof(FileInternals));
     file->fileMode = READ_WRITE;
