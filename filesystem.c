@@ -118,7 +118,7 @@ int writeInode(unsigned short int inodeIndex, Inode inode) {
     return 1;
 }
 
-int readInode(unsigned short int inodeIndex, Inode* inode) {
+int readInode(Inode* inode, unsigned short int inodeIndex) {
     InodeBlock inodeBlock;
     unsigned short int inodeBlockIndex = inodeIndex / INODES_PER_INODE_BLOCK + FIRST_INODE_BLOCK_INDEX;
     bzero(inode, sizeof(Inode));
@@ -155,7 +155,7 @@ int findFreeDataBlockIndex(void) {
     return -1;
 }
 
-int setInodeDataBlock(File file, unsigned short int blockIndex, unsigned short int overwriteBlockIndex) {
+int setInodeDataBlock(unsigned short int blockIndex, unsigned short int overwriteBlockIndex, File file) {
     int newIndirectBlockIndex;
     IndirectBlock indirectBlock;
 
@@ -275,7 +275,7 @@ int findInodeDataBlockIndex(unsigned short int blockIndex, Inode inode) {
     }
 }
 
-int writeDataBlockFromFile(File file, unsigned short int blockIndex, void * data) {
+int writeDataBlockFromFile(File file, void * data, unsigned short int blockIndex) {
    int dataBlockIndex = findInodeDataBlockIndex(blockIndex, file->inode);
 
    if (dataBlockIndex == 0) {
@@ -289,7 +289,7 @@ int writeDataBlockFromFile(File file, unsigned short int blockIndex, void * data
                fserror = FS_IO_ERROR;
                return 0;
            }
-            if (!setInodeDataBlock(file, blockIndex, dataBlockIndex))
+            if (!setInodeDataBlock(blockIndex, dataBlockIndex, file))
                 return 0;
        }
    }
@@ -301,7 +301,7 @@ int writeDataBlockFromFile(File file, unsigned short int blockIndex, void * data
    fserror = FS_NONE;
    return 1;
 }
-int readDataBlockFromFile(File file, unsigned short int blockIndex, void *data) {
+int readDataBlockFromFile(File file, void *data, unsigned short int blockIndex) {
     //NOTE: The blockIndex refers to the index of the data block for the file, not the software disk
     int dataBlockIndex;
     IndirectBlock indirectBlock;
@@ -381,7 +381,7 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes) {
     }
     else {
         while (numbytes > 0) {
-            if (!readDataBlockFromFile(file, file->position / SOFTWARE_DISK_BLOCK_SIZE, bytes)) {
+            if (!readDataBlockFromFile(file, bytes, file->position / SOFTWARE_DISK_BLOCK_SIZE)) {
                 fserror =  FS_IO_ERROR;
                 break;
             }
@@ -394,7 +394,7 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes) {
                 bytesToCopy = SOFTWARE_DISK_BLOCK_SIZE - offset;
             memcpy(bytes + offset, buf + bytesWritten, bytesToCopy);
 
-            if (!writeDataBlockFromFile(file, file->position / SOFTWARE_DISK_BLOCK_SIZE, bytes)) {
+            if (!writeDataBlockFromFile(file, bytes, file->position / SOFTWARE_DISK_BLOCK_SIZE)) {
                 fserror = FS_OUT_OF_SPACE;
                 break;
             }
@@ -421,7 +421,7 @@ unsigned long read_file(File file, void *buf, unsigned long numbytes) {
         fserror=FS_FILE_NOT_OPEN;
     else {
         while (numbytes > 0) {
-            if (!readDataBlockFromFile(file, file->position / SOFTWARE_DISK_BLOCK_SIZE, bytes))
+            if (!readDataBlockFromFile(file, bytes, file->position / SOFTWARE_DISK_BLOCK_SIZE))
                 fserror=FS_OUT_OF_SPACE;
             else {
                 int offset = file->position % SOFTWARE_DISK_BLOCK_SIZE;
@@ -521,7 +521,7 @@ File open_file(char *name, FileMode mode) {
                 return 0;
             }
             else {
-                if (!readInode(file->directory.inodeIndex, &(file->inode))) {
+                if (!readInode(&file->inode, file->directory.inodeIndex)) {
                     fserror = FS_IO_ERROR;
                     return 0;
                 }
