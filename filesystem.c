@@ -8,23 +8,23 @@
 
 #define MAX_NAME_SIZE 128
 #define NUM_DIRECTLY_MAPPED_INODE_BLOCKS 9 //How many data blocks each inode maps to
-#define NUM_INDIRECT_BLOCK_MAPPINGS 206 //512 divided by 2
+#define NUM_INDIRECT_BLOCK_MAPPINGS 256 //512 divided by 2
 #define INODES_PER_INODE_BLOCK 24
 
 #define INODE_BITMAP_INDEX 0
 #define DATA_BITMAP_INDEX 1
 
 #define FIRST_INODE_BLOCK_INDEX 2
-#define LAST_INODE_BLOCK_INDEX 43//An Inode takes up 24 bytes of space, so each Inode block holds 24 Inodes.
-                                     //And since we want to support up to 1008 files, we need 1008/24=42 Inode blocks
-#define FIRST_DIRECTORY_ITEM_BLOCK_INDEX 44 //We want to support up to 1008 files, so we need 1008
+#define LAST_INODE_BLOCK_INDEX 57//An Inode takes up 28 bytes of space, so each Inode block holds 18 Inodes.
+                                     //And since we want to support up to 1008 files, we need 1008/18=56 Inode blocks
+#define FIRST_DIRECTORY_ITEM_BLOCK_INDEX 58 //We want to support up to 1008 files, so we need 1008
                                                 //directory item blocks
-#define LAST_DIRECTORY_ITEM_BLOCK_INDEX 1051
+#define LAST_DIRECTORY_ITEM_BLOCK_INDEX 1108
 
 
 #define MAX_FILE_BYTES SOFTWARE_DISK_BLOCK_SIZE * NUM_DIRECTLY_MAPPED_INODE_BLOCKS + NUM_INDIRECT_BLOCK_MAPPINGS * SOFTWARE_DISK_BLOCK_SIZE
 
-#define FIRST_DATA_BLOCK_INDEX 1052
+#define FIRST_DATA_BLOCK_INDEX 1109
 #define LAST_DATA_BLOCK_INDEX 4999
 
 FSError fserror;
@@ -63,6 +63,8 @@ typedef struct Bitmap {
     unsigned char bytes[SOFTWARE_DISK_BLOCK_SIZE];
 } Bitmap;
 
+//Sets an inode's status to either not-in-use or in-use. This is done by associating each bit
+//within the bitmap with the index of each inode.
 int setInodeStatus(unsigned short int inodeIndex, int status) {
     Bitmap bitmap;
     if (!read_sd_block(&bitmap, INODE_BITMAP_INDEX)) {
@@ -81,6 +83,8 @@ int setInodeStatus(unsigned short int inodeIndex, int status) {
     return 1;
 }
 
+//Sets a file data block to either not-in-use or in-use. This is done by associating each
+//bit within the bitmap with the index of each data block.
 int setDataBlockStatus(unsigned short int blockIndex, int status) {
     Bitmap bitmap;
     if (!read_sd_block(&bitmap, DATA_BITMAP_INDEX)) {
@@ -99,6 +103,7 @@ int setDataBlockStatus(unsigned short int blockIndex, int status) {
     return 1;
 }
 
+//Writes an inode to the specified inodeIndex.
 int writeInode(unsigned short int inodeIndex, Inode inode) {
     InodeBlock inodeBlock;
 
@@ -118,22 +123,8 @@ int writeInode(unsigned short int inodeIndex, Inode inode) {
     return 1;
 }
 
-int readInode(Inode* inode, unsigned short int inodeIndex) {
-    InodeBlock inodeBlock;
-    unsigned short int inodeBlockIndex = inodeIndex / INODES_PER_INODE_BLOCK + FIRST_INODE_BLOCK_INDEX;
-    bzero(inode, sizeof(Inode));
-
-    if (inodeBlockIndex > LAST_INODE_BLOCK_INDEX)
-        return 0;
-    else {
-        if (read_sd_block(&inodeBlock, inodeBlockIndex)) {
-            *inode=inodeBlock.inodes[inodeIndex % INODES_PER_INODE_BLOCK];
-            return 1;
-        }
-            return 0;
-    }
-}
-
+//Finds the index of the irst available data block by checking each bit of the data block bitmap, looking
+//for the first 0.
 int findFreeDataBlockIndex(void) {
     Bitmap bitmap;
 
@@ -155,9 +146,11 @@ int findFreeDataBlockIndex(void) {
     return -1;
 }
 
+
+//Sets one of the inode's blocks to the given block index.
 int setInodeDataBlock(unsigned short int blockIndex, unsigned short int overwriteBlockIndex, File file) {
     int newIndirectBlockIndex;
-    IndirectBlock indirectBlock;
+    IndirectBlock * indirectBlock;
 
     if (blockIndex < NUM_DIRECTLY_MAPPED_INODE_BLOCKS)
         file->inode.blocks[blockIndex] = overwriteBlockIndex;
@@ -165,7 +158,8 @@ int setInodeDataBlock(unsigned short int blockIndex, unsigned short int overwrit
         //Creates an indirect block if one doesn't exist within the iNode yet
         if (!file->inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS]) {
             newIndirectBlockIndex = findFreeDataBlockIndex();
-            bzero(&indirectBlock, sizeof(IndirectBlock));
+            indirectBlock = (IndirectBlock*)malloc(sizeof(IndirectBlock));
+            bzero(indirectBlock, sizeof(IndirectBlock));
 
             if (!setDataBlockStatus(newIndirectBlockIndex, 1)) {
                 return 0;
@@ -175,14 +169,14 @@ int setInodeDataBlock(unsigned short int blockIndex, unsigned short int overwrit
         }
 
         else {
-            if (!read_sd_block(&indirectBlock, file->inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS]))
+            if (!read_sd_block(indirectBlock, file->inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS]))
                 return 0;
         }
         if (!setDataBlockStatus(overwriteBlockIndex, 1))
-        return 0;
+            return 0;
 
-        indirectBlock.blocks[blockIndex - NUM_DIRECTLY_MAPPED_INODE_BLOCKS] = overwriteBlockIndex;
-        if (!write_sd_block(&indirectBlock, file->inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS]))
+        indirectBlock->blocks[blockIndex - NUM_DIRECTLY_MAPPED_INODE_BLOCKS] = overwriteBlockIndex;
+        if (!write_sd_block(indirectBlock, file->inode.blocks[NUM_DIRECTLY_MAPPED_INODE_BLOCKS]))
             return 0;
 
         if (!writeInode(file->directory.inodeIndex, file->inode))
@@ -194,7 +188,7 @@ int setInodeDataBlock(unsigned short int blockIndex, unsigned short int overwrit
 
 
 
-
+//Finds the index of the first available inode by checking each bit of the inode bitmap, looking for the first 0.
 unsigned short int findFreeInodeIndex(void) {
     Bitmap bitmap;
 
@@ -216,6 +210,7 @@ unsigned short int findFreeInodeIndex(void) {
     return -1;
 }
 
+//Simply writes the given directory to the given directory block index.
 int writeDirectoryItem(DirectoryItem directory, unsigned short int blockIndex) {
     if (write_sd_block(&directory, blockIndex))
         return 1;
@@ -223,6 +218,7 @@ int writeDirectoryItem(DirectoryItem directory, unsigned short int blockIndex) {
         return 0;
 }
 
+//Creates a new directory item by searching for the first empty directory block and then writing to it.
 int createDirectoryItem(DirectoryItem directory) {
     DirectoryItem * currentDirectory = (DirectoryItem*) malloc(sizeof(DirectoryItem));
     for (unsigned short int i = FIRST_DIRECTORY_ITEM_BLOCK_INDEX; i <= LAST_DIRECTORY_ITEM_BLOCK_INDEX; i++) {
@@ -232,7 +228,7 @@ int createDirectoryItem(DirectoryItem directory) {
             break;
         }
         
-        if (currentDirectory->allocated == 0) {
+        else if (currentDirectory->allocated == 0) {
             writeDirectoryItem(directory, i);
             return i;
         }
@@ -243,6 +239,7 @@ int createDirectoryItem(DirectoryItem directory) {
     return -1;
 }
 
+//Finds a directory given a directory name, and then reads the directory into the given directory pointer
 int findDirectoryItem(DirectoryItem * directory, char* name) {
     for (int i=FIRST_DIRECTORY_ITEM_BLOCK_INDEX; i <= LAST_DIRECTORY_ITEM_BLOCK_INDEX; i++) {
         if (!read_sd_block(directory,i))
@@ -255,6 +252,7 @@ int findDirectoryItem(DirectoryItem * directory, char* name) {
 
     return -1;
 }
+
 
 int findInodeDataBlockIndex(unsigned short int blockIndex, Inode inode) {
     IndirectBlock indirectBlock;
@@ -275,6 +273,7 @@ int findInodeDataBlockIndex(unsigned short int blockIndex, Inode inode) {
     }
 }
 
+//Writes data from buffer to the correct data block index this file's inode points to
 int writeDataBlockFromFile(File file, void * data, unsigned short int blockIndex) {
    int dataBlockIndex = findInodeDataBlockIndex(blockIndex, file->inode);
 
@@ -301,6 +300,8 @@ int writeDataBlockFromFile(File file, void * data, unsigned short int blockIndex
    fserror = FS_NONE;
    return 1;
 }
+
+//Reads a data block into the data buffer with an index corresponding to this file's inode data blocks
 int readDataBlockFromFile(File file, void *data, unsigned short int blockIndex) {
     //NOTE: The blockIndex refers to the index of the data block for the file, not the software disk
     int dataBlockIndex;
@@ -521,9 +522,22 @@ File open_file(char *name, FileMode mode) {
                 return 0;
             }
             else {
-                if (!readInode(&file->inode, file->directory.inodeIndex)) {
-                    fserror = FS_IO_ERROR;
+                InodeBlock inodeBlock;
+                unsigned short int inodeBlockIndex = file->directory.inodeIndex / INODES_PER_INODE_BLOCK + FIRST_INODE_BLOCK_INDEX;
+                bzero(&file->inode, sizeof(Inode));
+
+                if (inodeBlockIndex > LAST_INODE_BLOCK_INDEX) {
+                    fserror = FS_OUT_OF_SPACE;
                     return 0;
+                }
+                else {
+                    if (read_sd_block(&inodeBlock, inodeBlockIndex)) {
+                        file->inode=inodeBlock.inodes[file->directory.inodeIndex % INODES_PER_INODE_BLOCK];
+                    }
+                    else {
+                        return 0;
+                        fserror=FS_IO_ERROR;
+                    }
                 }
             }
         }
